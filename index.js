@@ -2,26 +2,27 @@
 
 const AWS = require('aws-sdk');
 const program = require('commander');
+const Queue = require('./queue');
+const regionJson = require('./regions.json')
 
-const LATEST = '$LATEST';
-
-const listAvailableRegion = async () => {
-    //TODO: Implementing
-}
-
-const initAWSClient = async (args) => {
-    if (args.region) {
-        AWS.config.update({ region: args.region });
-    }
+const initAWSClient = async (service, region, args) => {
+    let client = '';
+    AWS.config.update({
+        region: region
+    });
     if (args.access_key & args.secret_key) {
         AWS.config.update({
             accessKeyId: args.access_key,
             secretAccessKey: args.secret_key
         });
     } else if (args.profile) {
-        const credentials = new AWS.SharedIniFileCredentials({ profile: args.profile });
+        const credentials = new AWS.SharedIniFileCredentials({ profile: args.profile});
         AWS.config.credentials = credentials;
     }
+    if (service == 'lambda') {
+        client = new AWS.Lambda();
+    }
+    return client;
 }
 
 const listLambdaFunctions = async (lambdaClient) => {
@@ -31,7 +32,6 @@ const listLambdaFunctions = async (lambdaClient) => {
     try {
         const params = {};
         response = await lambdaClient.listFunctions(params).promise();
-        console.log(response['Functions'].length);
     } catch (err) {
         console.error(err);
     }
@@ -84,40 +84,63 @@ const listLambdaVersions = async (lambdaClient, lambdaFunction) => {
     return response;
 }
 
+const formatRegionCommand = (regions) => {
+    let result = [];
+    for (let index in regions) {
+        result.push({ 'code': regions[index] })
+    }
+    return result;
+}
+
 const removeOldLambdaVersion = async (args) => {
     console.log(args);
     let numberToKeep = 2;
-    let regions = args.regions
-    try {
-        if (args.numToKeep) {
-            numberToKeep = args.numToKeep;
-        }
-    } catch (err) {
-        console.error(err);
+    if (args.numToKeep) {
+        numberToKeep = args.numToKeep;
     }
-
-    //for (region in regions) {
-    await initAWSClient(args);
-    const lambdaClient = new AWS.Lambda();
-    try {
-        let functions = await listLambdaFunctions(lambdaClient);
-        console.log(functions.length);
-        
-        for (let index in functions) {
-            let version = await listLambdaVersions(lambdaClient, functions[index]);
-            //TODO: Implementing
-        }
-    } catch (err) {
-        console.error(err);
+    let regions = regionJson;
+    if (args.regions) {
+        regions = formatRegionCommand(args.regions);
     }
-    //}
+    for (let index in regions) {
+        const lambdaClient = await initAWSClient('lambda', regions[index]['code'], args);
+        try {
+            let functions = await listLambdaFunctions(lambdaClient);
+            for (let index in functions) {
+                if (index == 0)
+                    continue;
+                let queue = new Queue(numberToKeep);
+                let versions = await listLambdaVersions(lambdaClient, functions[index]);
+                for (let index in versions['Versions']) {
+                    if (versions['Versions'][index]['Version'] === '$LATEST')
+                        continue;
+                    if (queue.isFull()) {
+                        let item = queue.dequeue();
+                        try {
+                            const params = {
+                                FunctionName: item['FunctionArn']
+                            }
+                            await lambdaClient.deleteFunction(params).promise();
+                        } catch (err) {
+                            console.error(err)
+                        }
+                    }
+                    queue.enqueue(versions['Versions'][index]);
+                }
+            }
+        } catch (err) {
+            console.error(err);
+        }
+    }
 }
 
 
 program
     .usage('[options]')
-    .option('-r, --region <region>', 'AWS region')
-    .option('-p, --profile <profile>', 'AWS profile')
+    .option('-a, --access-key <access-key>', 'AWS access key id. Must provide AWS secret access key as well (default: from local configuration)')
+    .option('-s, --secret-key <--secret-key>', 'AWS secret access key. Must provide AWS access key id as well (default: from local configuration.')
+    .option('-r, --regions [regions...]', 'AWS region to look for old Lambda versions')
+    .option('-p, --profile <profile>', 'AWS profile. Optional (default: "default" from local configuration).')
     .option('-n, --num-to-keep <number>', 'Number of latest versions to keep. Older versions will be deleted')
     .action(async (options) => {
         await removeOldLambdaVersion(options);
