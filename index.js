@@ -10,10 +10,10 @@ const initAWSClient = async (service, region, args) => {
     AWS.config.update({
         region: region
     });
-    if (args.access_key & args.secret_key) {
+    if (args.accessKey && args.secretKey) {
         AWS.config.update({
-            accessKeyId: args.access_key,
-            secretAccessKey: args.secret_key
+            accessKeyId: args.accessKey,
+            secretAccessKey: args.secretKey
         });
     } else if (args.profile) {
         const credentials = new AWS.SharedIniFileCredentials({ profile: args.profile});
@@ -107,8 +107,8 @@ const removeOldLambdaVersion = async (args) => {
         try {
             let functions = await listLambdaFunctions(lambdaClient);
             for (let index in functions) {
-                if (index == 0)
-                    continue;
+                // if (index == 0)
+                //     continue;
                 let queue = new Queue(numberToKeep);
                 let versions = await listLambdaVersions(lambdaClient, functions[index]);
                 for (let index in versions['Versions']) {
